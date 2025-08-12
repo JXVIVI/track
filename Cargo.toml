@@ -4,3 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = "0.4"
+rusqlite = { version = "0.30", features = ["bundled"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0" # For easy error handling
+clap = { version = "4.0", features = ["derive"] } # For CLI argument parsing
+
+[dev-dependencies]
+# For the SQLX CLI tool itself
+sqlx-cli = { version = "0.7", features = ["sqlite"], default-features = false }
+
+[lints.rust]
+unused_mut = "allow"
+unused_imports = "allow"
+unused_variables = "allow"
+dead_code = "allow"
