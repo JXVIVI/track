@@ -7,7 +7,7 @@ pub struct ProblemAttempt {
     pub number_of_attempts: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
 pub enum AttemptRating {
     Easy,

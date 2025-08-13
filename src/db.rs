@@ -1,8 +1,20 @@
-use crate::Problem;
 use crate::problem_attempts::{AttemptRating, ProblemAttempt};
+use crate::problems::LeetCodeDifficulty;
+use crate::Problem;
 use anyhow::Context;
 use chrono::NaiveDate;
+use sqlx::FromRow;
 use sqlx::SqlitePool;
+
+#[derive(Debug, FromRow)]
+pub struct ProgressView {
+    pub problem_id: i64,
+    pub name: String,
+    pub difficulty: Option<LeetCodeDifficulty>,
+    pub last_attempted: NaiveDate,
+    pub attempt_rating: AttemptRating,
+    pub number_of_attempts: i64,
+}
 
 /// Fetches the current progress for a single problem from the database.
 ///
@@ -128,4 +140,44 @@ pub async fn fetch_next_unattempted_problem(pool: &SqlitePool) -> anyhow::Result
     .context("Failed to fetch the next unattempted problem.")?;
 
     Ok(next_problem)
+}
+
+pub async fn fetch_all_progress(pool: &SqlitePool) -> anyhow::Result<Vec<ProgressView>> {
+    let progress_list = sqlx::query_as::<_, ProgressView>(
+        r#"
+        SELECT
+            p.id as problem_id,
+            p.name,
+            p.difficulty,
+            pr.last_attempted,
+            pr.attempt_rating,
+            pr.number_of_attempts
+        FROM
+            progress pr
+        JOIN
+            problems p ON pr.problem_id = p.id
+        ORDER BY
+            pr.last_attempted DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .context("Failed to fetch progress list from database.")?;
+
+    Ok(progress_list)
+}
+
+pub async fn fetch_all_problems(pool: &SqlitePool) -> anyhow::Result<Vec<Problem>> {
+    let all_problems = sqlx::query_as::<_, Problem>(
+        r#"
+        SELECT id, "order", name, difficulty, week
+        FROM problems
+        ORDER BY week ASC, "order" ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .context("Failed to fetch all problems from the database.")?;
+
+    Ok(all_problems)
 }

@@ -2,33 +2,42 @@
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// The command to execute.
+    /// The command to execute. If no command is given, help is shown.
     #[command(subcommand)]
     command: Option<Commands>,
 
     /// Populates the database from a problem bank JSON file in the ./static/ directory.
-    #[arg(long)] // This creates the `--build` flag
+    #[arg(long)]
     build: Option<String>,
+
+    /// Shows current progress and statistics for all attempted problems.
+    #[arg(long)]
+    progress: bool,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Shows the next unattempted problem to practice.
     #[command(name = "next", alias = "n")]
-    Next,
+    Next {
+        /// Display the problem details in a long, descriptive format.
+        #[arg(long, short)]
+        long: bool,
+    },
 
     /// Logs an attempt for a specific problem.
     Attempt {
         /// The LeetCode ID of the problem.
         id: i64,
-
         /// Your rating of the attempt (1=ShortFail, 2=LongFail, 3=Messy, 4=Hard, 5=Easy).
         #[arg(value_parser = clap::value_parser!(u8).range(1..=5))]
         rating: u8,
-
         /// The date of the attempt in YYYY-MM-DD format (optional, defaults to today).
         date: Option<String>,
     },
+
+    /// Shows all problems in the database, grouped by week.
+    All,
 }
 
 /// Converts the 1-5 integer rating from the CLI to the AttemptRating enum.
@@ -39,7 +48,7 @@ fn map_rating(rating_num: u8) -> AttemptRating {
         3 => AttemptRating::Messy,
         4 => AttemptRating::Hard,
         5 => AttemptRating::Easy,
-        _ => unreachable!(), // Clap's range validation prevents this
+        _ => unreachable!(),
     }
 }
 
@@ -60,8 +69,7 @@ async fn main() -> anyhow::Result<()> {
     // --- Parse CLI commands ---
     let cli = Cli::parse();
 
-    // --- Handle the --build flag first ---
-    // If the user provides `--build <filename>`, we run the populator and exit.
+    // --- Handle top-level flags first ---
     if let Some(bank_name) = cli.build {
         println!("\n--- Starting Problem Bank Population ---");
         if let Err(e) = populate_problem_bank(&pool, &bank_name).await {
@@ -72,27 +80,60 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // --- Handle Subcommands if --build was not used ---
+    if cli.progress {
+        println!("\n--- Current Progress ---");
+        let progress_list = fetch_all_progress(&pool).await?;
+        if progress_list.is_empty() {
+            println!("No problems have been attempted yet. Use the 'attempt' command to start!");
+        } else {
+            for item in &progress_list {
+                println!(
+                    "  - #{:<5} {:<40} Rating: {:<10} Attempts: {}",
+                    item.problem_id,
+                    item.name,
+                    format!("{:?}", item.attempt_rating),
+                    item.number_of_attempts
+                );
+            }
+            let mut stats: HashMap<AttemptRating, u32> = HashMap::new();
+            for item in &progress_list {
+                *stats.entry(item.attempt_rating).or_insert(0) += 1;
+            }
+            println!("\n--- Statistics ---");
+            println!("Total Problems Attempted: {}", progress_list.len());
+            for (rating, count) in stats {
+                println!("  - {:<10}: {}", format!("{:?}", rating), count);
+            }
+        }
+        return Ok(());
+    }
+
+    // --- Handle Subcommands ---
     if let Some(command) = cli.command {
         match command {
-            Commands::Next => {
-                println!("\n--- Finding next problem to attempt ---");
-                match fetch_next_unattempted_problem(&pool).await {
-                    Ok(Some(problem)) => {
-                        println!("Next up is: #{} - {}", problem.order, problem.name);
-                        println!("LeetCode ID: {}", problem.id);
+            Commands::Next { long } => match fetch_next_unattempted_problem(&pool).await {
+                Ok(Some(problem)) => {
+                    if long {
+                        println!("\n--- Next Problem to Attempt ---");
+                        println!("Order: #{}", problem.order);
+                        println!("Name:  {}", problem.name);
+                        println!("ID:    {}", problem.id);
                         if let Some(diff) = problem.difficulty {
-                            println!("Difficulty: {:?}", diff);
+                            println!("Diff:  {:?}", diff);
                         }
-                    }
-                    Ok(None) => {
-                        println!("🎉 Congratulations! You have attempted all problems!");
-                    }
-                    Err(e) => {
-                        eprintln!("Error fetching next problem: {:?}", e);
+                    } else {
+                        println!("{}", problem.id);
                     }
                 }
-            }
+                Ok(None) => {
+                    if long {
+                        println!("\n🎉 Congratulations! You have attempted all problems!");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error fetching next problem: {:?}", e);
+                }
+            },
             Commands::Attempt { id, rating, date } => {
                 println!("\n--- Logging attempt for problem {} ---", id);
                 let attempt_rating = map_rating(rating);
@@ -113,10 +154,33 @@ async fn main() -> anyhow::Result<()> {
                     id, attempt_rating
                 );
             }
+            Commands::All => {
+                println!("\n--- All Problems ---");
+                let all_problems = fetch_all_problems(&pool).await?;
+                if all_problems.is_empty() {
+                    println!("No problems found in the database. Use the --build command to populate it.");
+                } else {
+                    let mut last_printed_week: Option<i64> = None;
+                    for problem in &all_problems {
+                        if problem.week != last_printed_week {
+                            if let Some(week_num) = problem.week {
+                                println!("\nWeek: {}", week_num);
+                            } else {
+                                println!("\nWeek: Unassigned");
+                            }
+                            last_printed_week = problem.week;
+                        }
+                        println!("  {}: {} - {}", problem.order, problem.name, problem.id);
+                        if let Some(diff) = problem.difficulty {
+                            println!("    Difficulty: {:?}", diff);
+                        }
+                    }
+                }
+            }
         }
     } else {
-        // If no subcommand and no --build flag was given, print help.
-        println!("No command given. Use --help to see available commands.");
+        // If no command or flag was given, print help.
+        Cli::parse_from(["", "--help"]);
     }
 
     Ok(())
@@ -138,3 +202,4 @@ use problem_attempts::ProblemAttempt;
 use problems::Problem;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::types::chrono::NaiveDate;
+use std::collections::HashMap;
